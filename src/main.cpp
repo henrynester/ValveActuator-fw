@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-#include <nI2C.h>
+#include <Wire.h>
 #include <AutoPID.h>
 #include <util/atomic.h>
 
@@ -16,11 +16,10 @@ uint32_t t_homing_start;
 uint8_t stopped_pos; //position of motor when it was last braked
 
 //I2C
-CTWI g_twi;
-void onI2CRx(const uint8_t data[], const uint8_t length);
-void onI2CTx(void);
+void onI2CReceive(int);
+void onI2CRequest(void);
 bool connected;
-uint8_t last_cmd;
+volatile bool sensorRequestFlag, actuatorSetFlag;
 
 SensorData_t sensorData;
 uint8_t sensor_tx[sizeof(SensorData_t)]; //idk if this one needs to be volatile - the ISR only acceses it. can't hurt
@@ -43,11 +42,10 @@ void setup()
   digitalWrite(LED, HIGH); //if LED stays on, we're hanging in setup() somewhere
 
   //configure this device as an i2c slave
-  g_twi.SetLocalDeviceAddress(I2C_ADDR);
-  g_twi.SetSlaveReceiveHandler(onI2CRx);
-  g_twi.SetSlaveTransmitHandler(onI2CTx);
-  g_twi.SetTimeoutMS(1000);
-  g_twi.SetSpeed(CTWI::Speed::FAST);
+  Wire.setClock((uint32_t)100000);
+  Wire.begin(I2C_ADDR);
+  Wire.onReceive(onI2CReceive);
+  Wire.onRequest(onI2CRequest);
 
   //configure pins for driver and encoder
   g_drv.init();
@@ -57,8 +55,8 @@ void setup()
   //configure PID
   pos_PID.setBangBang(20); //use bang bang control if farther from goal than this
 
-  //Serial.begin(125000);
-  //Serial.println("slave");
+  Serial.begin(125000);
+  Serial.println("slave");
 
   delay(500);
 
@@ -79,7 +77,15 @@ void loop()
     //supposedly ATOMIC_RESTORESTATE makes sure the interrupt eventually runs once the block is done. I'm skeptical.
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
     {
-      //sensorData.goal_pos = actuatorData.goal_pos;
+      sensorData.goal_pos = actuatorData.goal_pos;
+    }
+
+    if (actuatorSetFlag)
+    {
+      t_last_goal_cmd = millis();
+      connected = true;
+
+      actuatorSetFlag = false;
     }
 
     if (connected)
@@ -171,75 +177,103 @@ void loop()
       {
         led_on = LED_DISCONNECTED & led_mask; //LED flash pattern
       }
-      //digitalWrite(LED, led_on);
+      digitalWrite(LED, led_on);
     }
     loop_count++;
 
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
     {
-      //memcpy((void *)(&sensor_tx), (void *)(&sensorData), sizeof(SensorData_t));
+      memcpy((void *)(&sensor_tx), (void *)(&sensorData), sizeof(SensorData_t));
     }
   }
 }
 
-void onI2CRx(const uint8_t data[], const uint8_t length)
+void onI2CReceive(int n_bytes)
 {
-  //print all recieved bytes
-  // Serial.print("rx:");
-  // for (int i = 0; i < length; i++)
-  // {
-  //   Serial.print(data[i], HEX);
-  //   Serial.print(" ");
-  // }
-  // Serial.println();
-  if (length <= 0)
-    return; //no data. what do you want, bro?
+  if (!Wire.available())
+    return;
 
-  switch (data[0]) //first byte is a command code
+  uint8_t cmd = Wire.read();
+  //Serial.println(cmd);
+
+  switch (cmd)
   {
   case SET_ACTUATOR_DATA:
-    if (length == (sizeof(ActuatorData_t) + 1)) //plus one for command byte
+  {
+    if (!Wire.available())
     {
-      //copy packet data (after first command byte) into goal_rx struct
-      //memcpy((void *)(&actuatorData), (void *)(&data[1]), sizeof(ActuatorData_t));
-
-      connected = true; //start working again, we just received a cmd
-      t_last_goal_cmd = millis();
+      return;
     }
+    uint8_t rx = Wire.read();
+    memcpy((void *)&actuatorData, (void *)&rx, sizeof(ActuatorData_t));
+    actuatorSetFlag = true;
+    //Serial.println(actuatorData.goal_pos);
+  }
+  break;
+  case REQUEST_SENSOR_DATA:
+    sensorRequestFlag = true;
     break;
   }
 
-  last_cmd = data[0]; //store the command, so we can reply correctly to message requests
+  while (Wire.available())
+  {
+    Wire.read();
+  }
+
+  // if (length <= 0)
+  //   return; //no data. what do you want, bro?
+
+  // switch (data[0]) //first byte is a command code
+  // {
+  // case SET_ACTUATOR_DATA:
+  //   if (length == (sizeof(ActuatorData_t) + 1)) //plus one for command byte
+  //   {
+  //     //copy packet data (after first command byte) into goal_rx struct
+  //     //memcpy((void *)(&actuatorData), (void *)(&data[1]), sizeof(ActuatorData_t));
+
+  //     connected = true; //start working again, we just received a cmd
+  //     t_last_goal_cmd = millis();
+  //   }
+  //   break;
+  // }
+
+  // last_cmd = data[0]; //store the command, so we can reply correctly to message requests
 }
 
-void onI2CTx(void)
+void onI2CRequest(void)
 {
-  uint8_t i2c_result = 0;
-
-  switch (last_cmd)
+  if (sensorRequestFlag)
   {
-  case REQUEST_SENSOR_DATA:
-    i2c_result = g_twi.SlaveQueueNonBlocking(sensor_tx, sizeof(SensorData_t));
-    break;
-  default:
-    break;
+    Wire.write(sensor_tx, sizeof(SensorData_t));
+
+    sensorRequestFlag = false;
   }
-  //update status with any i2c bus errors that occur on tx
-  //sensorData.faults.i2c_fault = i2c_result ? true : false;
-  last_cmd = 0;
-  /*
-  I2C errors:
-  0:success
-  1:busy
-  2:timeout
-  3:data too long to fit in transmit buffer
-  4:memory allocation failure
-  5:attempted illegal transition of state
-  6:received NACK on transmit of address
-  7:received NACK on transmit of data
-  8:illegal start or stop condition on bus
-  9:lost bus arbitration to other master
-  */
+  // uint8_t i2c_result = 0;
+
+  // switch (last_cmd)
+  // {
+  // case REQUEST_SENSOR_DATA:
+  //   i2c_result = g_twi.SlaveQueueNonBlocking(sensor_tx, sizeof(SensorData_t));
+  //   break;
+  // default:
+  //   break;
+  // }
+  // //update status with any i2c bus errors that occur on tx
+  // //sensorData.faults.i2c_fault = i2c_result ? true : false;
+  // last_cmd = 0;
+  // /*
+  // I2C errors:
+  // 0:success
+  // 1:busy
+  // 2:timeout
+  // 3:data too long to fit in transmit buffer
+  // 4:memory allocation failure
+  // 5:attempted illegal transition of state
+  // 6:received NACK on transmit of address
+  // 7:received NACK on transmit of data
+  // 8:illegal start or stop condition on bus
+  // 9:lost bus arbitration to other master
+  // */
 }
 
 double readPressure()
