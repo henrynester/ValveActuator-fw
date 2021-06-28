@@ -9,16 +9,16 @@
 //     FREE   //outputs high-impedance; motor spins "freely" (it has a gearbox...)
 // };
 
-class DRV8873
+class Motor
 {
-private:
-    int8_t speed;
-
 public:
+    Motor(uint8_t pwm_pin, uint8_t dir_pin)
+        : pwm_pin(pwm_pin),
+          dir_pin(dir_pin){};
     void init();
     //-100 (rev) ... 0 (brake) ... 100 (fwd)
     void setSpeed(int8_t speed);
-    int8_t getSpeed();
-    uint16_t readCurrentdA(); //dA = 1/10 Amp
-    uint8_t isInFault();
+
+private:
+    uint8_t pwm_pin, dir_pin;
 };

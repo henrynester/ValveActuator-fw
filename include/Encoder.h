@@ -4,16 +4,16 @@
 class Encoder
 {
 public:
+    Encoder(uint8_t encA_pin, uint8_t encB_pin)
+        : encA_pin(encA_pin),
+          encB_pin(encB_pin){};
     void init();
-    uint32_t getRawCount();
-    double getPosition();
+    uint16_t getRawCount();
     void update();
     void zero();
-    void setMax(uint32_t max);
-    uint8_t readLimit();
 
 private:
-    volatile uint32_t count;
-    uint32_t max;
+    uint8_t encA_pin, encB_pin;
+    volatile uint16_t count;
     void increment(), decrement();
 };

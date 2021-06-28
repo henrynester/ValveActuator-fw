@@ -2,24 +2,21 @@
 #include <Arduino.h>
 #include "config.h"
 
-Encoder g_enc;
-
-void encoderInterrupt()
-{
-    g_enc.update();
-}
+// void encoderInterrupt()
+// {
+//     g_enc.update();
+// }
 
 void Encoder::init()
 {
-    pinMode(ENCA, INPUT_PULLUP);
-    pinMode(ENCB, INPUT_PULLUP);
-    pinMode(LIMIT, INPUT_PULLUP); //switch to ground with internal pullup
-    attachInterrupt(digitalPinToInterrupt(ENCA), encoderInterrupt, CHANGE);
+    pinMode(encA_pin, INPUT_PULLUP);
+    pinMode(encB_pin, INPUT_PULLUP);
+    //attachInterrupt(digitalPinToInterrupt(ENCA), encoderInterrupt, CHANGE);
 }
 
 void Encoder::increment()
 {
-    if (count < UINT32_MAX)
+    if (count < UINT16_MAX)
         count++;
 }
 void Encoder::decrement()
@@ -30,10 +27,10 @@ void Encoder::decrement()
 
 void Encoder::update()
 {
-    if (digitalRead(ENCA))
+    if (digitalRead(encA_pin))
     {
         //F0 (ENCA) rising interrupt. check ENCB to see whether rotation is fwd or rev
-        if (digitalRead(ENCB))
+        if (digitalRead(encB_pin))
             decrement();
         else
             increment();
@@ -41,34 +38,21 @@ void Encoder::update()
     else
     {
         //falling interrupt
-        if (digitalRead(ENCB))
+        if (digitalRead(encB_pin))
             increment();
         else
             decrement();
     }
 }
 
-uint8_t Encoder::readLimit()
-{
-    return !digitalRead(LIMIT); //Active LOW
-}
-
-uint32_t Encoder::getRawCount()
+uint16_t Encoder::getRawCount()
 {
     //thread-safe?
     //count could be modified if a tick occurs during this function's execution
     //assume that the return is an atomic operation...
     return count;
 }
-double Encoder::getPosition()
-{
-    return ((double)count * 100.0 / (double)max);
-}
 void Encoder::zero()
 {
     count = 0;
-}
-void Encoder::setMax(uint32_t _max)
-{
-    max = _max;
 }
